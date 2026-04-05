@@ -102,7 +102,12 @@ let metadataInspectorTests =
                 let allDlls = project.Packages |> List.collect (fun p -> p.DllPaths)
                 use context = MetadataInspector.createContext allDlls
                 let pkg = project.Packages |> List.find (fun p -> not p.DllPaths.IsEmpty)
-                let types = MetadataInspector.getPublicTypes context pkg.DllPaths.Head pkg.Name
+
+                let types =
+                    match MetadataInspector.getPublicTypes context pkg.DllPaths.Head pkg.Name with
+                    | Ok t -> t
+                    | Error msg -> failtest msg
+
                 Expect.isNonEmpty types $"Should find public types in {pkg.Name}"
             | Error msg -> failtest msg
         }
@@ -118,13 +123,18 @@ let metadataInspectorTests =
                 let allDlls = project.Packages |> List.collect (fun p -> p.DllPaths)
                 use context = MetadataInspector.createContext allDlls
                 let pkg = project.Packages |> List.find (fun p -> not p.DllPaths.IsEmpty)
-                let types = MetadataInspector.getPublicTypes context pkg.DllPaths.Head pkg.Name
+
+                let types =
+                    match MetadataInspector.getPublicTypes context pkg.DllPaths.Head pkg.Name with
+                    | Ok t -> t
+                    | Error msg -> failtest msg
+
                 let firstType = types.Head
 
-                let typeDef =
-                    MetadataInspector.getTypeDefinition context firstType.AssemblyPath firstType.FullName
-
-                Expect.isSome typeDef $"Should get type definition for {firstType.FullName}"
+                match MetadataInspector.getTypeDefinition context firstType.AssemblyPath firstType.FullName with
+                | Ok(Some _) -> ()
+                | Ok None -> failtest $"Should get type definition for {firstType.FullName}"
+                | Error msg -> failtest msg
             | Error msg -> failtest msg
         }
     ]
@@ -187,10 +197,10 @@ let projectContextManagerTests =
                 Expect.isNonEmpty state.TypeIndex "should have types"
                 let entry = state.TypeIndex.[0]
 
-                let typeDef =
-                    MetadataInspector.getTypeDefinition state.Context entry.AssemblyPath entry.FullName
-
-                Expect.isSome typeDef $"Should get definition for {entry.FullName}"
+                match MetadataInspector.getTypeDefinition state.Context entry.AssemblyPath entry.FullName with
+                | Ok(Some _) -> ()
+                | Ok None -> failtest $"Should get definition for {entry.FullName}"
+                | Error msg -> failtest msg
         }
 
         test "Reload replaces context" {

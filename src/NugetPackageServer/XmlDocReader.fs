@@ -65,9 +65,8 @@ module XmlDocReader =
         }
 
     let parseXmlDocFile (path: string) =
-        let dict = Dictionary<string, XmlDocEntry>()
-
         try
+            let dict = Dictionary<string, XmlDocEntry>()
             let doc = XDocument.Load(path)
 
             let members = doc.Descendants(XName.Get "member")
@@ -77,10 +76,10 @@ module XmlDocReader =
 
                 if not (isNull nameAttr) then
                     dict.[nameAttr.Value] <- parseEntry m
-        with _ ->
-            ()
 
-        dict
+            Ok dict
+        with ex ->
+            Error $"Failed to parse XML doc file {path}: {ex.Message}"
 
     let rec private formatTypeName (t: Type) =
         if isNull t then

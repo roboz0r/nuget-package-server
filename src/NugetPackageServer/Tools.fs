@@ -3,6 +3,7 @@ namespace NugetPackageServer
 open System.ComponentModel
 open System.Runtime.InteropServices
 open System.Text
+open System.Threading.Tasks
 open ModelContextProtocol.Server
 
 [<McpServerToolType>]
@@ -15,28 +16,40 @@ type NugetTools(manager: ProjectContextManager) =
 
     [<McpServerTool(Name = "load_project")>]
     [<Description("Load a .NET project's NuGet package information. Parses project.assets.json to discover all packages. Run 'dotnet restore' first if the project hasn't been restored.")>]
-    member _.LoadProject([<Description("Path to the .csproj or .fsproj file")>] projectPath: string) =
-        match manager.LoadProject(projectPath) with
-        | Error msg -> $"Failed to load project: {msg}"
-        | Ok state ->
-            let direct = state.Project.Packages |> List.filter (fun p -> p.IsDirect)
+    member _.LoadProject([<Description("Path to the .csproj or .fsproj file")>] projectPath: string) : Task<string> =
+        task {
+            return!
+                Task.Run(fun () ->
+                    match manager.LoadProject(projectPath) with
+                    | Error msg -> $"Failed to load project: {msg}"
+                    | Ok state ->
+                        let direct = state.Project.Packages |> List.filter (fun p -> p.IsDirect)
 
-            let transitive = state.Project.Packages |> List.filter (fun p -> not p.IsDirect)
+                        let transitive = state.Project.Packages |> List.filter (fun p -> not p.IsDirect)
 
-            let sb = StringBuilder()
+                        let sb = StringBuilder()
 
-            sb.AppendLine($"Project loaded: {state.ProjectPath}") |> ignore
+                        sb.AppendLine($"Project loaded: {state.ProjectPath}") |> ignore
 
-            sb.AppendLine($"Target Framework: {state.Project.TargetFramework}") |> ignore
+                        sb.AppendLine($"Target Framework: {state.Project.TargetFramework}") |> ignore
 
-            sb.AppendLine($"Types indexed: {state.TypeIndex.Length}") |> ignore
+                        sb.AppendLine($"Types indexed: {state.TypeIndex.Length}") |> ignore
 
-            sb.AppendLine(
-                $"Packages: {state.Project.Packages.Length} ({direct.Length} direct, {transitive.Length} transitive)"
-            )
-            |> ignore
+                        sb.AppendLine(
+                            $"Packages: {state.Project.Packages.Length} ({direct.Length} direct, {transitive.Length} transitive)"
+                        )
+                        |> ignore
 
-            sb.ToString()
+                        if not state.Warnings.IsEmpty then
+                            sb.AppendLine() |> ignore
+                            sb.AppendLine($"Warnings ({state.Warnings.Length}):") |> ignore
+
+                            for w in state.Warnings do
+                                sb.AppendLine($"  - {w}") |> ignore
+
+                        sb.ToString()
+                )
+        }
 
     [<McpServerTool(Name = "unload_project")>]
     [<Description("Unload a previously loaded project to free memory")>]
@@ -93,7 +106,8 @@ type NugetTools(manager: ProjectContextManager) =
               Description("Filter to types in this namespace (prefix match)")>] ``namespace``: string,
             [<Optional;
               DefaultParameterValue(null: string);
-              Description("Filter by type kind: class, interface, struct, enum, delegate")>] typeKind: string,
+              Description("Filter by type kind: class, abstract class, sealed class, static class, interface, struct, enum, delegate")>] typeKind:
+                string,
             [<Optional;
               DefaultParameterValue(null: string);
               Description("Path to the project file. Optional if only one project is loaded.")>] projectPath: string
@@ -158,8 +172,9 @@ type NugetTools(manager: ProjectContextManager) =
                 | Some entry ->
 
                     match MetadataInspector.getTypeDefinition state.Context entry.AssemblyPath fullTypeName with
-                    | None -> $"Type '{fullTypeName}' could not be loaded."
-                    | Some typeDef ->
+                    | Error msg -> $"Type '{fullTypeName}' could not be loaded: {msg}"
+                    | Ok None -> $"Type '{fullTypeName}' not found in the assembly."
+                    | Ok(Some typeDef) ->
 
                         let sb = StringBuilder()
 
@@ -261,12 +276,16 @@ type NugetTools(manager: ProjectContextManager) =
         ([<Optional;
            DefaultParameterValue(null: string);
            Description("Path to the project file. Optional if only one project is loaded.")>] projectPath: string)
-        =
-        withProject
-            projectPath
-            (fun state ->
-                match manager.LoadProject(state.ProjectPath) with
-                | Ok newState ->
-                    $"Project context refreshed successfully. Loaded {newState.Project.Packages.Length} packages, {newState.TypeIndex.Length} types."
-                | Error msg -> $"Failed to refresh project context: {msg}"
-            )
+        : Task<string> =
+        task {
+            match manager.TryResolveProject(projectPath) with
+            | Error msg -> return msg
+            | Ok state ->
+                return!
+                    Task.Run(fun () ->
+                        match manager.LoadProject(state.ProjectPath) with
+                        | Ok newState ->
+                            $"Project context refreshed successfully. Loaded {newState.Project.Packages.Length} packages, {newState.TypeIndex.Length} types."
+                        | Error msg -> $"Failed to refresh project context: {msg}"
+                    )
+        }

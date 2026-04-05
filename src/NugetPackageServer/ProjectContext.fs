@@ -1,9 +1,14 @@
 namespace NugetPackageServer
 
 open System
+open System.Collections.Concurrent
 open System.Collections.Generic
 open System.IO
 open System.Reflection
+
+[<AutoOpen>]
+module Disposable =
+    let inline dispose (x: #IDisposable) = x.Dispose()
 
 type ProjectState =
     {
@@ -12,6 +17,7 @@ type ProjectState =
         Context: MetadataLoadContext
         TypeIndex: TypeSummary array
         XmlDocCache: Dictionary<string, Dictionary<string, XmlDocEntry>>
+        Warnings: string list
     }
 
     interface IDisposable with
@@ -28,6 +34,7 @@ module ProjectState =
             | Error msg -> Error msg
             | Ok project ->
 
+                let warnings = ResizeArray<string>()
                 let allDllPaths = project.Packages |> List.collect (fun p -> p.DllPaths)
 
                 let context = MetadataInspector.createContext allDllPaths
@@ -36,7 +43,13 @@ module ProjectState =
                     project.Packages
                     |> List.collect (fun pkg ->
                         pkg.DllPaths
-                        |> List.collect (fun dll -> MetadataInspector.getPublicTypes context dll pkg.Name)
+                        |> List.collect (fun dll ->
+                            match MetadataInspector.getPublicTypes context dll pkg.Name with
+                            | Ok types -> types
+                            | Error msg ->
+                                warnings.Add(msg)
+                                []
+                        )
                     )
                     |> List.toArray
 
@@ -44,10 +57,10 @@ module ProjectState =
 
                 for pkg in project.Packages do
                     for xmlPath in pkg.XmlDocPaths do
-                        let docs = XmlDocReader.parseXmlDocFile xmlPath
-
-                        if docs.Count > 0 then
-                            xmlDocCache.[xmlPath] <- docs
+                        match XmlDocReader.parseXmlDocFile xmlPath with
+                        | Ok docs when docs.Count > 0 -> xmlDocCache.[xmlPath] <- docs
+                        | Ok _ -> ()
+                        | Error msg -> warnings.Add(msg)
 
                 Ok
                     {
@@ -56,6 +69,7 @@ module ProjectState =
                         Context = context
                         TypeIndex = typeIndex
                         XmlDocCache = xmlDocCache
+                        Warnings = Seq.toList warnings
                     }
 
     let findXmlDoc (s: ProjectState) (memberId: string) =
@@ -67,7 +81,8 @@ module ProjectState =
         )
 
 type ProjectContextManager() =
-    let projects = Dictionary<string, ProjectState>(StringComparer.OrdinalIgnoreCase)
+    let projects =
+        ConcurrentDictionary<string, ProjectState>(StringComparer.OrdinalIgnoreCase)
 
     let normalize (path: string) = Path.GetFullPath(path)
 
@@ -78,26 +93,34 @@ type ProjectContextManager() =
             Error $"Project file not found: {fullPath}"
         else
 
-            // Dispose existing context for this path if reloading
-            match projects.TryGetValue(fullPath) with
-            | true, existing -> (existing :> IDisposable).Dispose()
-            | _ -> ()
-
             match ProjectState.build fullPath with
             | Error msg ->
-                projects.Remove(fullPath) |> ignore
+                match projects.TryRemove(fullPath) with
+                | true, old -> dispose old
+                | _ -> ()
+
                 Error msg
-            | Ok state ->
-                projects.[fullPath] <- state
-                Ok state
+            | Ok newState ->
+                let mutable toDispose: ProjectState option = None
+
+                projects.AddOrUpdate(
+                    fullPath,
+                    newState,
+                    fun _ old ->
+                        toDispose <- Some old
+                        newState
+                )
+                |> ignore
+
+                toDispose |> Option.iter dispose
+                Ok newState
 
     member _.UnloadProject(projectPath: string) =
         let fullPath = normalize projectPath
 
-        match projects.TryGetValue(fullPath) with
+        match projects.TryRemove(fullPath) with
         | true, state ->
-            (state :> IDisposable).Dispose()
-            projects.Remove(fullPath) |> ignore
+            dispose state
             Ok()
         | _ -> Error $"No project loaded for: {fullPath}"
 
@@ -128,6 +151,6 @@ type ProjectContextManager() =
     interface IDisposable with
         member _.Dispose() =
             for state in projects.Values do
-                (state :> IDisposable).Dispose()
+                dispose state
 
             projects.Clear()

@@ -41,18 +41,6 @@ module MetadataInspector =
         let resolver = PathAssemblyResolver(paths)
         new MetadataLoadContext(resolver)
 
-    let private classifyType (t: Type) =
-        if t.IsInterface then
-            "interface"
-        elif t.IsEnum then
-            "enum"
-        elif t.IsValueType then
-            "struct"
-        elif t.BaseType |> isNull |> not && t.BaseType.FullName = "System.MulticastDelegate" then
-            "delegate"
-        else
-            "class"
-
     let getPublicTypes (context: MetadataLoadContext) (dllPath: string) (packageName: string) =
         try
             let assembly = context.LoadFromAssemblyPath(dllPath)
@@ -67,13 +55,14 @@ module MetadataInspector =
                             FullName = fullName
                             PackageName = packageName
                             Namespace = t.Namespace |> Option.ofObj |> Option.defaultValue ""
-                            TypeKind = classifyType t
+                            TypeKind = TypeFormatting.formatTypeKind t
                             AssemblyPath = dllPath
                         }
             )
             |> Array.toList
-        with _ ->
-            []
+            |> Ok
+        with ex ->
+            Error $"Failed to load types from {dllPath}: {ex.Message}"
 
     let getTypeDefinition (context: MetadataLoadContext) (assemblyPath: string) (fullTypeName: string) =
         try
@@ -81,7 +70,7 @@ module MetadataInspector =
             let t = assembly.GetType(fullTypeName)
 
             if isNull t then
-                None
+                Ok None
             else
 
                 let publicInstance = BindingFlags.Public ||| BindingFlags.Instance
@@ -140,18 +129,20 @@ module MetadataInspector =
                     else
                         []
 
-                Some
-                    {
-                        FullName = fullTypeName
-                        TypeKind = TypeFormatting.formatTypeKind t
-                        BaseType = baseType
-                        Interfaces = interfaces
-                        GenericParameters = genericParams
-                        Constructors = constructors
-                        Properties = properties
-                        Methods = methods
-                        Events = events
-                        Fields = fields
-                    }
-        with _ ->
-            None
+                Ok(
+                    Some
+                        {
+                            FullName = fullTypeName
+                            TypeKind = TypeFormatting.formatTypeKind t
+                            BaseType = baseType
+                            Interfaces = interfaces
+                            GenericParameters = genericParams
+                            Constructors = constructors
+                            Properties = properties
+                            Methods = methods
+                            Events = events
+                            Fields = fields
+                        }
+                )
+        with ex ->
+            Error $"Failed to load type '{fullTypeName}' from {assemblyPath}: {ex.Message}"
