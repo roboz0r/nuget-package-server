@@ -1,6 +1,7 @@
 bin/
 obj/
 artifacts/
+tmp/
 .claude/
 .serena/
 .mcp.json

@@ -77,6 +77,7 @@ module AssetsParser =
 
                         let dllPaths =
                             lib.CompileTimeAssemblies
+                            |> Seq.filter (fun a -> not (a.Path.EndsWith("_._")))
                             |> Seq.map (fun a -> Path.Combine(pkgDir, a.Path.Replace('/', Path.DirectorySeparatorChar)))
                             |> Seq.filter File.Exists
                             |> Seq.toList

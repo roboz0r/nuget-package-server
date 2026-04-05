@@ -68,13 +68,27 @@ load_project(projectPath: "path/to/MyProject.csproj")
 
 The server parses `project.assets.json` to discover all packages. Run `dotnet restore` first if the project hasn't been restored. Multiple projects can be loaded simultaneously.
 
+### load_package
+
+Load a NuGet package by name into an isolated context for exploration. Useful for evaluating packages before adding them to a project.
+
+```mcp
+load_package(name: "Humanizer.Core", version: "2.14.1", workingDirectory: "/path/to/repo")
+```
+
+Creates a temporary project under `{workingDirectory}/tmp/`, runs `dotnet restore`, and indexes the package. Respects `nuget.config` and Central Package Management (`Directory.Packages.props`) from the working directory. The `tfm` parameter is optional if a project is already loaded.
+
 ### unload_project
 
-Free memory by unloading a previously loaded project.
+Free memory by unloading a previously loaded project or package.
 
 ### list_project_packages
 
 List all NuGet packages (direct and transitive) referenced by the loaded project.
+
+### list_namespaces
+
+List all namespaces across loaded packages, grouped by package. Useful for discovering the structure of an unfamiliar package before drilling into types. Supports an optional `packageName` filter.
 
 ### search_types
 
@@ -83,9 +97,20 @@ Search for types across all loaded package assemblies. Supports optional filters
 - `query` -- case-insensitive substring match against full type name
 - `packageName` -- filter to a specific NuGet package
 - `namespace` -- prefix match on namespace
-- `typeKind` -- filter by `class`, `interface`, `struct`, `enum`, or `delegate`
+- `typeKind` -- filter by `class`, `abstract class`, `sealed class`, `static class`, `interface`, `struct`, `enum`, or `delegate`
 
 Returns up to 50 matches.
+
+### search_members
+
+Search for methods, properties, events, and fields across all loaded package types. Supports optional filters:
+
+- `query` -- case-insensitive substring match against member name
+- `packageName` -- filter to a specific NuGet package
+- `typeName` -- substring match on declaring type name
+- `memberKind` -- filter by `method`, `property`, `constructor`, `event`, `field`, or `enum value`
+
+Returns up to 50 lightweight matches. Use `get_type_definition` for full signatures.
 
 ### get_type_definition
 
@@ -110,9 +135,23 @@ dotnet build
 ### Running tests
 
 ```bash
-dotnet run --project test/NugetPackageServer.Tests        # unit tests
-dotnet run --project test/NugetPackageServer.MCP.Tests    # e2e tests
+dotnet test
 ```
+
+### Running from source
+
+```bash
+# From the repo root
+dotnet pack src/NugetPackageServer/NugetPackageServer.fsproj -o ./artifacts
+
+# In another repo, install as a local tool
+dotnet tool install NugetPackageServer --add-source /absolute/path/to/nuget-package-server/artifacts
+
+# Or as a global tool
+dotnet tool install -g NugetPackageServer --add-source /absolute/path/to/nuget-package-server/artifacts
+```
+
+Then add the MCP config file described above.
 
 ## License
 

@@ -29,6 +29,14 @@ type TypeDefinition =
         Fields: string list
     }
 
+type MemberSummary =
+    {
+        MemberName: string
+        MemberKind: string
+        DeclaringType: string
+        PackageName: string
+    }
+
 module MetadataInspector =
 
     let private getRuntimeAssemblyPaths () =
@@ -63,6 +71,84 @@ module MetadataInspector =
             |> Ok
         with ex ->
             Error $"Failed to load types from {dllPath}: {ex.Message}"
+
+    let getPublicMembers (context: MetadataLoadContext) (dllPath: string) (packageName: string) =
+        try
+            let assembly = context.LoadFromAssemblyPath(dllPath)
+
+            let publicDeclared =
+                BindingFlags.Public
+                ||| BindingFlags.Instance
+                ||| BindingFlags.Static
+                ||| BindingFlags.DeclaredOnly
+
+            assembly.GetExportedTypes()
+            |> Array.collect (fun t ->
+                match t.FullName with
+                | null -> Array.empty
+                | typeName ->
+                    let members = ResizeArray<MemberSummary>()
+
+                    for c in t.GetConstructors(BindingFlags.Public ||| BindingFlags.Instance) do
+                        members.Add(
+                            {
+                                MemberName = ".ctor"
+                                MemberKind = "constructor"
+                                DeclaringType = typeName
+                                PackageName = packageName
+                            }
+                        )
+
+                    for p in t.GetProperties(publicDeclared) do
+                        members.Add(
+                            {
+                                MemberName = p.Name
+                                MemberKind = "property"
+                                DeclaringType = typeName
+                                PackageName = packageName
+                            }
+                        )
+
+                    for m in t.GetMethods(publicDeclared) do
+                        if not m.IsSpecialName then
+                            members.Add(
+                                {
+                                    MemberName = m.Name
+                                    MemberKind = "method"
+                                    DeclaringType = typeName
+                                    PackageName = packageName
+                                }
+                            )
+
+                    for e in t.GetEvents(publicDeclared) do
+                        members.Add(
+                            {
+                                MemberName = e.Name
+                                MemberKind = "event"
+                                DeclaringType = typeName
+                                PackageName = packageName
+                            }
+                        )
+
+                    for f in t.GetFields(publicDeclared) do
+                        if not f.IsSpecialName then
+                            let kind = if t.IsEnum then "enum value" else "field"
+
+                            members.Add(
+                                {
+                                    MemberName = f.Name
+                                    MemberKind = kind
+                                    DeclaringType = typeName
+                                    PackageName = packageName
+                                }
+                            )
+
+                    members.ToArray()
+            )
+            |> Array.toList
+            |> Ok
+        with ex ->
+            Error $"Failed to load members from {dllPath}: {ex.Message}"
 
     let getTypeDefinition (context: MetadataLoadContext) (assemblyPath: string) (fullTypeName: string) =
         try

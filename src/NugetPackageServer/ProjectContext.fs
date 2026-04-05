@@ -3,6 +3,7 @@ namespace NugetPackageServer
 open System
 open System.Collections.Concurrent
 open System.Collections.Generic
+open System.Diagnostics
 open System.IO
 open System.Reflection
 
@@ -16,6 +17,7 @@ type ProjectState =
         Project: ResolvedProject
         Context: MetadataLoadContext
         TypeIndex: TypeSummary array
+        MemberIndex: MemberSummary array
         XmlDocCache: Dictionary<string, Dictionary<string, XmlDocEntry>>
         Warnings: string list
     }
@@ -53,6 +55,20 @@ module ProjectState =
                     )
                     |> List.toArray
 
+                let memberIndex =
+                    project.Packages
+                    |> List.collect (fun pkg ->
+                        pkg.DllPaths
+                        |> List.collect (fun dll ->
+                            match MetadataInspector.getPublicMembers context dll pkg.Name with
+                            | Ok members -> members
+                            | Error msg ->
+                                warnings.Add(msg)
+                                []
+                        )
+                    )
+                    |> List.toArray
+
                 let xmlDocCache = Dictionary<string, Dictionary<string, XmlDocEntry>>()
 
                 for pkg in project.Packages do
@@ -68,6 +84,7 @@ module ProjectState =
                         Project = project
                         Context = context
                         TypeIndex = typeIndex
+                        MemberIndex = memberIndex
                         XmlDocCache = xmlDocCache
                         Warnings = Seq.toList warnings
                     }
@@ -79,6 +96,72 @@ module ProjectState =
             | true, entry -> Some entry
             | _ -> None
         )
+
+module PackageLoader =
+
+    let private isCpmEnabled (repoRoot: string) =
+        let propsPath = Path.Combine(repoRoot, "Directory.Packages.props")
+
+        if File.Exists(propsPath) then
+            let content = File.ReadAllText(propsPath)
+            content.Contains("ManagePackageVersionsCentrally") && content.Contains("true")
+        else
+            false
+
+    let private generateProjectFile (packageName: string) (version: string) (tfm: string) (useCpm: bool) =
+        let versionAttr =
+            if useCpm then
+                $"VersionOverride=\"{version}\""
+            else
+                $"Version=\"{version}\""
+
+        $"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>{tfm}</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="{packageName}" {versionAttr} />
+  </ItemGroup>
+</Project>
+"""
+
+    let private runDotnetRestore (projectDir: string) =
+        let psi = ProcessStartInfo()
+        psi.FileName <- "dotnet"
+        psi.Arguments <- "restore"
+        psi.WorkingDirectory <- projectDir
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+        psi.CreateNoWindow <- true
+
+        use proc = Process.Start(psi)
+        let stdout = proc.StandardOutput.ReadToEnd()
+        let stderr = proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+
+        if proc.ExitCode <> 0 then
+            let output = if stderr.Length > 0 then stderr else stdout
+            Error $"dotnet restore failed (exit code {proc.ExitCode}): {output}"
+        else
+            Ok()
+
+    let createAndRestore (repoRoot: string) (packageName: string) (version: string) (tfm: string) =
+        let safeName = $"{packageName}_{version}_{tfm}"
+        let tmpDir = Path.Combine(repoRoot, "tmp", safeName)
+        let projectFile = Path.Combine(tmpDir, $"{safeName}.csproj")
+
+        try
+            Directory.CreateDirectory(tmpDir) |> ignore
+            let useCpm = isCpmEnabled repoRoot
+            let content = generateProjectFile packageName version tfm useCpm
+            File.WriteAllText(projectFile, content)
+
+            match runDotnetRestore tmpDir with
+            | Error msg -> Error msg
+            | Ok() -> Ok projectFile
+        with ex ->
+            Error $"Failed to create temp project: {ex.Message}"
 
 type ProjectContextManager() =
     let projects =
@@ -125,6 +208,12 @@ type ProjectContextManager() =
         | _ -> Error $"No project loaded for: {fullPath}"
 
     member _.GetLoadedProjects() = projects.Values |> Seq.toList
+
+    member _.TryGetDefaultTfm() =
+        if projects.Count = 1 then
+            Some (projects.Values |> Seq.head).Project.TargetFramework
+        else
+            None
 
     member _.ProjectCount = projects.Count
 

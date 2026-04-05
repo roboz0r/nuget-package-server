@@ -33,7 +33,10 @@ type NugetTools(manager: ProjectContextManager) =
 
                         sb.AppendLine($"Target Framework: {state.Project.TargetFramework}") |> ignore
 
-                        sb.AppendLine($"Types indexed: {state.TypeIndex.Length}") |> ignore
+                        sb.AppendLine(
+                            $"Types indexed: {state.TypeIndex.Length}, Members indexed: {state.MemberIndex.Length}"
+                        )
+                        |> ignore
 
                         sb.AppendLine(
                             $"Packages: {state.Project.Packages.Length} ({direct.Length} direct, {transitive.Length} transitive)"
@@ -49,6 +52,66 @@ type NugetTools(manager: ProjectContextManager) =
 
                         sb.ToString()
                 )
+        }
+
+    [<McpServerTool(Name = "load_package")>]
+    [<Description("Load a NuGet package by name into an isolated context for exploration. Creates a temporary project, restores the package, and indexes its types. Useful for evaluating packages before adding them to a project.")>]
+    member _.LoadPackage
+        (
+            [<Description("NuGet package name, e.g. Newtonsoft.Json")>] name: string,
+            [<Description("Package version, e.g. 13.0.3")>] version: string,
+            [<Optional;
+              DefaultParameterValue(null: string);
+              Description("Target framework moniker, e.g. net10.0. Defaults to the loaded project's TFM if one is loaded.")>] tfm:
+                string,
+            [<Description("Working directory for the temporary project. This determines nuget.config and Directory.Packages.props discovery.")>] workingDirectory:
+                string
+        ) : Task<string> =
+        task {
+            let resolvedTfm =
+                if not (System.String.IsNullOrEmpty(tfm)) then
+                    Some tfm
+                else
+                    manager.TryGetDefaultTfm()
+
+            match resolvedTfm with
+            | None ->
+                return
+                    "Target framework is required. Specify the tfm parameter (e.g. net10.0), or load a project first so the TFM can be inferred."
+            | Some tfm ->
+                return!
+                    Task.Run(fun () ->
+                        match PackageLoader.createAndRestore workingDirectory name version tfm with
+                        | Error msg -> $"Failed to load package: {msg}"
+                        | Ok projectFile ->
+                            match manager.LoadProject(projectFile) with
+                            | Error msg -> $"Package restored but failed to index: {msg}"
+                            | Ok state ->
+                                let sb = StringBuilder()
+
+                                sb.AppendLine($"Package loaded: {name} {version} ({tfm})") |> ignore
+
+                                sb.AppendLine(
+                                    $"Types indexed: {state.TypeIndex.Length}, Members indexed: {state.MemberIndex.Length}"
+                                )
+                                |> ignore
+
+                                sb.AppendLine(
+                                    $"Packages resolved: {state.Project.Packages.Length} (including transitive dependencies)"
+                                )
+                                |> ignore
+
+                                sb.AppendLine($"Temp project: {projectFile}") |> ignore
+
+                                if not state.Warnings.IsEmpty then
+                                    sb.AppendLine() |> ignore
+                                    sb.AppendLine($"Warnings ({state.Warnings.Length}):") |> ignore
+
+                                    for w in state.Warnings do
+                                        sb.AppendLine($"  - {w}") |> ignore
+
+                                sb.ToString()
+                    )
         }
 
     [<McpServerTool(Name = "unload_project")>]
@@ -90,6 +153,51 @@ type NugetTools(manager: ProjectContextManager) =
 
                     for pkg in transitive do
                         sb.AppendLine($"  {pkg.Name} {pkg.Version}") |> ignore
+
+                sb.ToString()
+            )
+
+    [<McpServerTool(Name = "list_namespaces")>]
+    [<Description("List all namespaces across loaded packages, grouped by package. Useful for discovering the structure of an unfamiliar package before drilling into types.")>]
+    member _.ListNamespaces
+        (
+            [<Optional; DefaultParameterValue(null: string); Description("Filter to a specific NuGet package name")>] packageName:
+                string,
+            [<Optional;
+              DefaultParameterValue(null: string);
+              Description("Path to the project file. Optional if only one project is loaded.")>] projectPath: string
+        ) =
+        withProject
+            projectPath
+            (fun state ->
+                let filtered =
+                    if isNull packageName || packageName.Length = 0 then
+                        state.TypeIndex
+                    else
+                        state.TypeIndex
+                        |> Array.filter (fun t ->
+                            t.PackageName.Equals(packageName, System.StringComparison.OrdinalIgnoreCase)
+                        )
+
+                let grouped = filtered |> Array.groupBy (fun t -> t.PackageName) |> Array.sortBy fst
+
+                let sb = StringBuilder()
+
+                if grouped.Length = 0 then
+                    sb.AppendLine("No namespaces found.") |> ignore
+                else
+                    for pkgName, types in grouped do
+                        let namespaces =
+                            types |> Array.map (fun t -> t.Namespace) |> Array.distinct |> Array.sort
+
+                        sb.AppendLine($"## {pkgName} ({namespaces.Length} namespaces)") |> ignore
+
+                        for ns in namespaces do
+                            let display = if ns.Length = 0 then "<global>" else ns
+                            let count = types |> Array.filter (fun t -> t.Namespace = ns) |> Array.length
+                            sb.AppendLine($"  {display} ({count} types)") |> ignore
+
+                        sb.AppendLine() |> ignore
 
                 sb.ToString()
             )
@@ -143,6 +251,66 @@ type NugetTools(manager: ProjectContextManager) =
 
                     for t in results do
                         sb.AppendLine($"  [{t.TypeKind}] {t.FullName}  ({t.PackageName})") |> ignore
+
+                    if results.Length = 50 then
+                        sb.AppendLine() |> ignore
+
+                        sb.AppendLine("Results capped at 50. Refine your search with additional filters.")
+                        |> ignore
+
+                sb.ToString()
+            )
+
+    [<McpServerTool(Name = "search_members")>]
+    [<Description("Search for methods, properties, events, and fields across all loaded package types. Returns up to 50 lightweight matches — use get_type_definition for full signatures.")>]
+    member _.SearchMembers
+        (
+            [<Description("Search term (case-insensitive substring match against member name)")>] query: string,
+            [<Optional; DefaultParameterValue(null: string); Description("Filter to a specific NuGet package name")>] packageName:
+                string,
+            [<Optional;
+              DefaultParameterValue(null: string);
+              Description("Filter to members of a specific type (substring match on full type name)")>] typeName: string,
+            [<Optional;
+              DefaultParameterValue(null: string);
+              Description("Filter by member kind: method, property, constructor, event, field, enum value")>] memberKind:
+                string,
+            [<Optional;
+              DefaultParameterValue(null: string);
+              Description("Path to the project file. Optional if only one project is loaded.")>] projectPath: string
+        ) =
+        withProject
+            projectPath
+            (fun state ->
+                let results =
+                    state.MemberIndex
+                    |> Array.filter (fun m ->
+                        (isNull query
+                         || query.Length = 0
+                         || m.MemberName.Contains(query, System.StringComparison.OrdinalIgnoreCase))
+                        && (isNull packageName
+                            || packageName.Length = 0
+                            || m.PackageName.Equals(packageName, System.StringComparison.OrdinalIgnoreCase))
+                        && (isNull typeName
+                            || typeName.Length = 0
+                            || m.DeclaringType.Contains(typeName, System.StringComparison.OrdinalIgnoreCase))
+                        && (isNull memberKind
+                            || memberKind.Length = 0
+                            || m.MemberKind.Equals(memberKind, System.StringComparison.OrdinalIgnoreCase))
+                    )
+                    |> Array.truncate 50
+
+                let sb = StringBuilder()
+
+                if results.Length = 0 then
+                    sb.AppendLine("No members found matching the search criteria.") |> ignore
+                else
+                    sb.AppendLine($"Found {results.Length} member(s):") |> ignore
+                    sb.AppendLine() |> ignore
+
+                    for m in results do
+                        sb.AppendLine($"  [{m.MemberKind}] {m.DeclaringType}.{m.MemberName}  ({m.PackageName})")
+                        |> ignore
 
                     if results.Length = 50 then
                         sb.AppendLine() |> ignore

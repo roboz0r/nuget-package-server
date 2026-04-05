@@ -121,9 +121,12 @@ let mcpTests =
             let! tools = client.ListToolsAsync()
             let toolNames = tools |> Seq.map (fun (t: McpClientTool) -> t.Name) |> Seq.toList
             Expect.contains toolNames "load_project" "should have load_project"
+            Expect.contains toolNames "load_package" "should have load_package"
             Expect.contains toolNames "unload_project" "should have unload_project"
             Expect.contains toolNames "list_project_packages" "should have list_project_packages"
+            Expect.contains toolNames "list_namespaces" "should have list_namespaces"
             Expect.contains toolNames "search_types" "should have search_types"
+            Expect.contains toolNames "search_members" "should have search_members"
             Expect.contains toolNames "get_type_definition" "should have get_type_definition"
             Expect.contains toolNames "get_xml_documentation" "should have get_xml_documentation"
             Expect.contains toolNames "refresh_project_context" "should have refresh_project_context"
@@ -141,6 +144,7 @@ let mcpTests =
             let! text = loadProject client
             Expect.stringContains text "Project loaded" "should confirm loading"
             Expect.stringContains text "Types indexed" "should report type count"
+            Expect.stringContains text "Members indexed" "should report member count"
         }
 
         testTask "list_project_packages returns packages after load" {
@@ -179,6 +183,23 @@ let mcpTests =
             let! result = callTool client "refresh_project_context" None
             let text = getTextContent result
             Expect.stringContains text "refreshed successfully" "should succeed"
+        }
+
+        testTask "load_package loads a NuGet package into isolated context" {
+            use! client = createClient ()
+
+            let args =
+                makeArgs [
+                    "name", box "Humanizer.Core"
+                    "version", box "2.14.1"
+                    "tfm", box "net10.0"
+                    "workingDirectory", box repoRoot
+                ]
+
+            let! result = callTool client "load_package" (Some args)
+            let text = getTextContent result
+            Expect.stringContains text "Package loaded" "should confirm loading"
+            Expect.stringContains text "Types indexed" "should report type count"
         }
 
         testTask "unload_project removes project" {
