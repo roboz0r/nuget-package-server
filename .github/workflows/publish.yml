@@ -1,0 +1,71 @@
+# To publish a release:
+#   1. Update <PackageVersion> in Directory.Build.props
+#   2. Commit: git commit -am "Bump version to 0.2.0"
+#   3. Tag:    git tag v0.2.0
+#   4. Push:   git push && git push origin v0.2.0
+
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g. 0.2.0). Leave empty to use version from Directory.Build.props.'
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches Directory.Build.props
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PROPS_VERSION=$(grep -oP '(?<=<PackageVersion>)[^<]+' Directory.Build.props)
+          if [ "$TAG_VERSION" != "$PROPS_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match Directory.Build.props PackageVersion ($PROPS_VERSION)"
+            exit 1
+          fi
+          echo "Tag version matches: $TAG_VERSION"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pack
+        run: |
+          VERSION_ARG=""
+          if [ -n "${{ steps.version.outputs.version }}" ]; then
+            VERSION_ARG="-p:Version=${{ steps.version.outputs.version }}"
+          fi
+          dotnet pack src/NugetPackageServer/NugetPackageServer.fsproj -c Release --no-build $VERSION_ARG -o ./artifacts
+
+      - name: Push to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

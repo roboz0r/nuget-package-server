@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NugetPackageServer/NugetPackageServer.fsproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/NugetPackageServer.MCP.Tests/NugetPackageServer.MCP.Tests.fsproj" />
+    <Project Path="test/NugetPackageServer.Tests/NugetPackageServer.Tests.fsproj" />
+  </Folder>
+</Solution>

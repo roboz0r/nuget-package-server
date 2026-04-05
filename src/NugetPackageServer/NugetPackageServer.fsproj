@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>nuget-package-server</ToolCommandName>
+    <PackageId>NugetPackageServer</PackageId>
+    <Description>MCP server for browsing NuGet package APIs. Lets AI agents inspect types, methods, and documentation from packages referenced by .NET projects.</Description>
+    <PackageTags>mcp;nuget;dotnet;ai;tools</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="AssetsParser.fs" />
+    <Compile Include="XmlDocReader.fs" />
+    <Compile Include="TypeFormatting.fs" />
+    <Compile Include="MetadataInspector.fs" />
+    <Compile Include="ProjectContext.fs" />
+    <Compile Include="Tools.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="NuGet.ProjectModel" />
+    <PackageReference Include="System.Reflection.MetadataLoadContext" />
+  </ItemGroup>
+
+</Project>
