@@ -30,13 +30,19 @@ let private serverProjectDir = Path.Combine(repoRoot, "src", "NugetPackageServer
 let private targetProjectFile =
     Path.Combine(serverProjectDir, "NugetPackageServer.fsproj")
 
+let private serverAssemblyPath =
+    let testBase = DirectoryInfo(AppContext.BaseDirectory)
+    let tfm = testBase.Name
+    let config = testBase.Parent.Name
+    Path.Combine(serverProjectDir, "bin", config, tfm, "NugetPackageServer.dll")
+
 let private createClient () =
     task {
         let options =
             StdioClientTransportOptions(
                 Name = "nuget-package-server",
                 Command = "dotnet",
-                Arguments = [| "run"; "--no-build"; "--project"; serverProjectDir |]
+                Arguments = [| serverAssemblyPath |]
             )
 
         let transport = new StdioClientTransport(options)
