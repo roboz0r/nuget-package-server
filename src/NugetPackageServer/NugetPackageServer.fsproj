@@ -13,6 +13,7 @@
     <Compile Include="AssetsParser.fs" />
     <Compile Include="XmlDocReader.fs" />
     <Compile Include="TypeFormatting.fs" />
+    <Compile Include="AndroidRefPacks.fs" />
     <Compile Include="MetadataInspector.fs" />
     <Compile Include="ProjectContext.fs" />
     <Compile Include="Tools.fs" />

@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Collections.Generic
 open System.Collections.ObjectModel
+open System.Text.RegularExpressions
 open Expecto
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
@@ -200,6 +201,65 @@ let mcpTests =
             let text = getTextContent result
             Expect.stringContains text "Package loaded" "should confirm loading"
             Expect.stringContains text "Types indexed" "should report type count"
+        }
+
+        testTask "load_package loads Xamarin.AndroidX.Core on net10.0-android36.0 (smoke)" {
+            use! client = createClient ()
+
+            let args =
+                makeArgs [
+                    "name", box "Xamarin.AndroidX.Core"
+                    "version", box "1.17.0.2"
+                    "tfm", box "net10.0-android36.0"
+                    "workingDirectory", box repoRoot
+                ]
+
+            let! result = callTool client "load_package" (Some args)
+            let text = getTextContent result
+            Expect.stringContains text "Package loaded" "should confirm loading"
+
+            let typesLine =
+                text.Split('\n')
+                |> Array.tryFind (fun l -> l.Contains("Types indexed"))
+                |> Option.defaultValue ""
+
+            let typesCount =
+                let m = Regex.Match(typesLine, @"Types indexed: (\d+)")
+                if m.Success then Int32.Parse(m.Groups.[1].Value) else 0
+
+            Expect.isGreaterThan typesCount 0 $"should index >0 types for AndroidX.Core; got output:\n{text}"
+        }
+
+        testTask "load_package loads Xamarin.AndroidX.AppCompat on net10.0-android36.0 (stress)" {
+            use! client = createClient ()
+
+            let args =
+                makeArgs [
+                    "name", box "Xamarin.AndroidX.AppCompat"
+                    "version", box "1.7.1.3"
+                    "tfm", box "net10.0-android36.0"
+                    "workingDirectory", box repoRoot
+                ]
+
+            let! result = callTool client "load_package" (Some args)
+            let text = getTextContent result
+            Expect.stringContains text "Package loaded" "should confirm loading"
+
+            let typesLine =
+                text.Split('\n')
+                |> Array.tryFind (fun l -> l.Contains("Types indexed"))
+                |> Option.defaultValue ""
+
+            let typesCount =
+                let m = Regex.Match(typesLine, @"Types indexed: (\d+)")
+                if m.Success then Int32.Parse(m.Groups.[1].Value) else 0
+
+            Expect.isGreaterThan
+                typesCount
+                0
+                $"AppCompat stress test: should index >0 types (tests _Microsoft.Android.Resource.Designer stub). Output:\n{text}"
+
+            Expect.isFalse (text.Contains("TypeLoadException")) $"no TypeLoadException expected; output:\n{text}"
         }
 
         testTask "unload_project removes project" {

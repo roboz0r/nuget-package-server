@@ -37,17 +37,34 @@ type MemberSummary =
         PackageName: string
     }
 
+type ContextInputs =
+    {
+        TargetFramework: string
+        PackageDllPaths: string list
+    }
+
 module MetadataInspector =
 
     let private getRuntimeAssemblyPaths () =
         let runtimeDir = RuntimeEnvironment.GetRuntimeDirectory()
         Directory.GetFiles(runtimeDir, "*.dll") |> Array.toList
 
-    let createContext (allDllPaths: string list) =
-        let paths = allDllPaths @ getRuntimeAssemblyPaths () |> List.distinct
+    let createContext (inputs: ContextInputs) : MetadataLoadContext * string list =
+        let androidResult =
+            AndroidRefPacks.getAndroidRefAssemblyPaths inputs.TargetFramework
+
+        let extraPaths, diagnostics =
+            match androidResult with
+            | NotAndroid -> [], []
+            | Resolved(refFolder, paths) -> paths, [ $"Android TFM detected: using ref pack at {refFolder}" ]
+            | MissingPack msg -> [], [ $"Android TFM detected but ref pack could not be resolved: {msg}" ]
+
+        let paths =
+            inputs.PackageDllPaths @ extraPaths @ getRuntimeAssemblyPaths ()
+            |> List.distinct
 
         let resolver = PathAssemblyResolver(paths)
-        new MetadataLoadContext(resolver)
+        new MetadataLoadContext(resolver), diagnostics
 
     let getPublicTypes (context: MetadataLoadContext) (dllPath: string) (packageName: string) =
         try

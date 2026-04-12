@@ -39,7 +39,15 @@ module ProjectState =
                 let warnings = ResizeArray<string>()
                 let allDllPaths = project.Packages |> List.collect (fun p -> p.DllPaths)
 
-                let context = MetadataInspector.createContext allDllPaths
+                let context, ctxDiagnostics =
+                    MetadataInspector.createContext
+                        {
+                            TargetFramework = project.TargetFramework
+                            PackageDllPaths = allDllPaths
+                        }
+
+                for d in ctxDiagnostics do
+                    warnings.Add(d)
 
                 let typeIndex =
                     project.Packages

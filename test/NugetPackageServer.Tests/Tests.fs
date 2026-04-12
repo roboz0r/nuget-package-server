@@ -100,7 +100,15 @@ let metadataInspectorTests =
             match AssetsParser.parseAssetsFile assetsPath with
             | Ok project ->
                 let allDlls = project.Packages |> List.collect (fun p -> p.DllPaths)
-                use context = MetadataInspector.createContext allDlls
+
+                let context, _ =
+                    MetadataInspector.createContext
+                        {
+                            TargetFramework = project.TargetFramework
+                            PackageDllPaths = allDlls
+                        }
+
+                use context = context
                 let pkg = project.Packages |> List.find (fun p -> not p.DllPaths.IsEmpty)
 
                 let types =
@@ -121,7 +129,15 @@ let metadataInspectorTests =
             match AssetsParser.parseAssetsFile assetsPath with
             | Ok project ->
                 let allDlls = project.Packages |> List.collect (fun p -> p.DllPaths)
-                use context = MetadataInspector.createContext allDlls
+
+                let context, _ =
+                    MetadataInspector.createContext
+                        {
+                            TargetFramework = project.TargetFramework
+                            PackageDllPaths = allDlls
+                        }
+
+                use context = context
                 let pkg = project.Packages |> List.find (fun p -> not p.DllPaths.IsEmpty)
 
                 let types =
@@ -223,6 +239,101 @@ let projectContextManagerTests =
             | Ok() -> ()
 
             Expect.equal mgr.ProjectCount 0 "should have 0 projects after unload"
+        }
+    ]
+
+[<Tests>]
+let androidRefPacksTests =
+    testList "AndroidRefPacks" [
+        test "tryParseAndroidTfm matches net10.0-android36.0" {
+            match AndroidRefPacks.tryParseAndroidTfm "net10.0-android36.0" with
+            | Some parsed ->
+                Expect.equal parsed.NetVersion "10.0" "NetVersion"
+                Expect.equal parsed.ApiLevel 36 "ApiLevel"
+            | None -> failtest "Expected Some"
+        }
+
+        test "tryParseAndroidTfm matches net6.0-android31" {
+            match AndroidRefPacks.tryParseAndroidTfm "net6.0-android31" with
+            | Some parsed ->
+                Expect.equal parsed.NetVersion "6.0" "NetVersion"
+                Expect.equal parsed.ApiLevel 31 "ApiLevel"
+            | None -> failtest "Expected Some"
+        }
+
+        test "tryParseAndroidTfm returns None for net10.0" {
+            Expect.isNone (AndroidRefPacks.tryParseAndroidTfm "net10.0") "plain TFM should not parse"
+        }
+
+        test "tryParseAndroidTfm returns None for net10.0-ios18.0" {
+            Expect.isNone (AndroidRefPacks.tryParseAndroidTfm "net10.0-ios18.0") "iOS TFM should not parse"
+        }
+
+        test "findAndroidRefPack picks the highest version that has a matching ref folder" {
+            let fixture =
+                Path.Combine(Path.GetTempPath(), $"nps-android-fixture-{Guid.NewGuid():N}")
+
+            let packDir = Path.Combine(fixture, "packs", "Microsoft.Android.Ref.36")
+
+            try
+                // Higher version that doesn't have net10.0 — should be skipped.
+                Directory.CreateDirectory(Path.Combine(packDir, "99.0.1", "ref", "net11.0"))
+                |> ignore
+
+                // Lower version that does have net10.0 — should be selected.
+                let targetRef = Path.Combine(packDir, "36.1.43", "ref", "net10.0")
+                Directory.CreateDirectory(targetRef) |> ignore
+                File.WriteAllBytes(Path.Combine(targetRef, "Mono.Android.dll"), [||])
+
+                // Middle version with net10.0 but higher than 36.1.43 — should win.
+                let winnerRef = Path.Combine(packDir, "36.2.0", "ref", "net10.0")
+                Directory.CreateDirectory(winnerRef) |> ignore
+                File.WriteAllBytes(Path.Combine(winnerRef, "Mono.Android.dll"), [||])
+
+                match AndroidRefPacks.findAndroidRefPack fixture 36 "10.0" with
+                | Ok path ->
+                    Expect.equal (Path.GetFullPath path) (Path.GetFullPath winnerRef) "highest valid version wins"
+                | Error msg -> failtest msg
+            finally
+                if Directory.Exists fixture then
+                    Directory.Delete(fixture, true)
+        }
+
+        test "findAndroidRefPack errors when pack dir is missing" {
+            let fixture =
+                Path.Combine(Path.GetTempPath(), $"nps-android-missing-{Guid.NewGuid():N}")
+
+            try
+                Directory.CreateDirectory(fixture) |> ignore
+
+                match AndroidRefPacks.findAndroidRefPack fixture 36 "10.0" with
+                | Ok _ -> failtest "expected Error"
+                | Error msg -> Expect.stringContains msg "Microsoft.Android.Ref.36" "error names the pack"
+            finally
+                if Directory.Exists fixture then
+                    Directory.Delete(fixture, true)
+        }
+
+        test "ensureResourceDesignerStub emits an assembly loadable by MetadataLoadContext" {
+            match AndroidRefPacks.ensureResourceDesignerStub () with
+            | Error msg -> failtest msg
+            | Ok path ->
+                Expect.isTrue (File.Exists path) $"stub file should exist at {path}"
+
+                let runtimeDlls =
+                    Directory.GetFiles(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+                    |> Array.toList
+
+                let resolver = Reflection.PathAssemblyResolver(path :: runtimeDlls)
+                use ctx = new Reflection.MetadataLoadContext(resolver)
+                let asm = ctx.LoadFromAssemblyPath(path)
+                Expect.equal (asm.GetName().Name) "_Microsoft.Android.Resource.Designer" "assembly name matches"
+        }
+
+        test "getAndroidRefAssemblyPaths returns NotAndroid for plain TFM" {
+            match AndroidRefPacks.getAndroidRefAssemblyPaths "net10.0" with
+            | NotAndroid -> ()
+            | other -> failtest $"expected NotAndroid, got {other}"
         }
     ]
 
