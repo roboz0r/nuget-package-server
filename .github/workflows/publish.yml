@@ -55,20 +55,16 @@ jobs:
         id: version
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            VERSION="${{ github.event.inputs.version }}"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            echo "version=" >> "$GITHUB_OUTPUT"
+            VERSION=$(grep -oP '(?<=<PackageVersion>)[^<]+' Directory.Build.props)
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Pack
-        run: |
-          VERSION_ARG=""
-          if [ -n "${{ steps.version.outputs.version }}" ]; then
-            VERSION_ARG="-p:Version=${{ steps.version.outputs.version }}"
-          fi
-          dotnet pack src/NugetPackageServer/NugetPackageServer.fsproj -c Release --no-build $VERSION_ARG -o ./artifacts
+        run: dotnet pack src/NugetPackageServer/NugetPackageServer.fsproj -c Release --no-build -p:Version=${{ steps.version.outputs.version }} -o ./artifacts
 
       - name: Push to NuGet
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./artifacts/NugetPackageServer.${{ steps.version.outputs.version }}.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
