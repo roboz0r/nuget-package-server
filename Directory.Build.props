@@ -6,7 +6,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Authors>Robert Lenders</Authors>
     <Copyright>Copyright (c) Robert Lenders 2026</Copyright>
-    <PackageVersion>0.1.0</PackageVersion>
+    <PackageVersion>0.2.0</PackageVersion>
     <RepositoryUrl>https://github.com/roboz0r/nuget-package-server</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/roboz0r/nuget-package-server</PackageProjectUrl>
