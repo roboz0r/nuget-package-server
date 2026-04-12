@@ -44,6 +44,7 @@ module ProjectState =
                         {
                             TargetFramework = project.TargetFramework
                             PackageDllPaths = allDllPaths
+                            ProjectPath = Some projectPath
                         }
 
                 for d in ctxDiagnostics do

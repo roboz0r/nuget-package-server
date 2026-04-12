@@ -41,6 +41,7 @@ type ContextInputs =
     {
         TargetFramework: string
         PackageDllPaths: string list
+        ProjectPath: string option
     }
 
 module MetadataInspector =
@@ -53,18 +54,49 @@ module MetadataInspector =
         let androidResult =
             AndroidRefPacks.getAndroidRefAssemblyPaths inputs.TargetFramework
 
-        let extraPaths, diagnostics =
+        let diagnostics = ResizeArray<string>()
+
+        let extraPaths, stubPath =
             match androidResult with
-            | NotAndroid -> [], []
-            | Resolved(refFolder, paths) -> paths, [ $"Android TFM detected: using ref pack at {refFolder}" ]
-            | MissingPack msg -> [], [ $"Android TFM detected but ref pack could not be resolved: {msg}" ]
+            | NotAndroid -> [], None
+            | Resolved(refFolder, paths, stub) ->
+                diagnostics.Add($"Android TFM detected: using ref pack at {refFolder}")
+                paths, stub
+            | MissingPack msg ->
+                diagnostics.Add($"Android TFM detected but ref pack could not be resolved: {msg}")
+                [], None
+
+        // When the project has been built, prefer the real Resource.Designer over the stub:
+        // it has the correct strong name / PKT, so PathAssemblyResolver accepts it directly
+        // and it carries real resource IDs instead of an empty module.
+        let realDesignerPath =
+            match inputs.ProjectPath, androidResult with
+            | Some projectPath, Resolved _ ->
+                match AndroidRefPacks.findRealResourceDesigner projectPath inputs.TargetFramework with
+                | Some path ->
+                    diagnostics.Add($"Using real Resource.Designer assembly from {path}")
+                    Some path
+                | None -> None
+            | _ -> None
+
+        let designerPath =
+            match realDesignerPath with
+            | Some _ -> realDesignerPath
+            | None -> stubPath
 
         let paths =
-            inputs.PackageDllPaths @ extraPaths @ getRuntimeAssemblyPaths ()
+            inputs.PackageDllPaths
+            @ extraPaths
+            @ (realDesignerPath |> Option.toList)
+            @ getRuntimeAssemblyPaths ()
             |> List.distinct
 
-        let resolver = PathAssemblyResolver(paths)
-        new MetadataLoadContext(resolver), diagnostics
+        let resolver: MetadataAssemblyResolver =
+            match designerPath with
+            | Some designer -> AndroidAwareAssemblyResolver(paths, designer)
+            | None -> PathAssemblyResolver(paths)
+
+        new MetadataLoadContext(resolver), List.ofSeq diagnostics
 
     let getPublicTypes (context: MetadataLoadContext) (dllPath: string) (packageName: string) =
         try

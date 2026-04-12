@@ -106,6 +106,7 @@ let metadataInspectorTests =
                         {
                             TargetFramework = project.TargetFramework
                             PackageDllPaths = allDlls
+                            ProjectPath = None
                         }
 
                 use context = context
@@ -135,6 +136,7 @@ let metadataInspectorTests =
                         {
                             TargetFramework = project.TargetFramework
                             PackageDllPaths = allDlls
+                            ProjectPath = None
                         }
 
                 use context = context
@@ -334,6 +336,113 @@ let androidRefPacksTests =
             match AndroidRefPacks.getAndroidRefAssemblyPaths "net10.0" with
             | NotAndroid -> ()
             | other -> failtest $"expected NotAndroid, got {other}"
+        }
+
+        test "AndroidAwareAssemblyResolver returns stub even for strong-named request" {
+            match AndroidRefPacks.ensureResourceDesignerStub () with
+            | Error msg -> failtest msg
+            | Ok stubPath ->
+                let runtimeDlls =
+                    Directory.GetFiles(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+                    |> Array.toList
+
+                let paths = stubPath :: runtimeDlls
+                let strongName = Reflection.AssemblyName("_Microsoft.Android.Resource.Designer")
+                strongName.Version <- System.Version(1, 0, 0, 0)
+                strongName.SetPublicKeyToken([| 0x1euy; 0x93uy; 0x60uy; 0xd6uy; 0x62uy; 0x90uy; 0x57uy; 0xeeuy |])
+
+                // Sanity check: the default PathAssemblyResolver filters the unsigned stub
+                // out on PKT mismatch, which is the bug the custom resolver fixes.
+                let plain = Reflection.PathAssemblyResolver(paths)
+                use plainCtx = new Reflection.MetadataLoadContext(plain)
+
+                Expect.isNull
+                    (plain.Resolve(plainCtx, strongName))
+                    "PathAssemblyResolver should reject the unsigned stub for strong-named request"
+
+                let custom = AndroidAwareAssemblyResolver(paths, stubPath)
+                use ctx = new Reflection.MetadataLoadContext(custom)
+                let resolved = custom.Resolve(ctx, strongName)
+                Expect.isNotNull resolved "custom resolver should return the stub"
+
+                Expect.equal
+                    (resolved.GetName().Name)
+                    "_Microsoft.Android.Resource.Designer"
+                    "resolved assembly name matches"
+        }
+
+        test "findRealResourceDesigner picks the newest DLL matching the TFM" {
+            let fixture =
+                Path.Combine(Path.GetTempPath(), $"nps-android-obj-{Guid.NewGuid():N}")
+
+            let projectPath = Path.Combine(fixture, "App.csproj")
+
+            try
+                Directory.CreateDirectory(fixture) |> ignore
+                File.WriteAllText(projectPath, "<Project />")
+
+                // Debug/<tfm>/ — should be considered.
+                let debugDir = Path.Combine(fixture, "obj", "Debug", "net10.0-android36.0")
+                Directory.CreateDirectory(debugDir) |> ignore
+                let debugDll = Path.Combine(debugDir, "_Microsoft.Android.Resource.Designer.dll")
+                File.WriteAllBytes(debugDll, [| 0uy |])
+
+                // Release/<tfm>/ — newer, should win.
+                let releaseDir = Path.Combine(fixture, "obj", "Release", "net10.0-android36.0")
+                Directory.CreateDirectory(releaseDir) |> ignore
+
+                let releaseDll =
+                    Path.Combine(releaseDir, "_Microsoft.Android.Resource.Designer.dll")
+
+                File.WriteAllBytes(releaseDll, [| 0uy |])
+                File.SetLastWriteTimeUtc(releaseDll, DateTime.UtcNow.AddMinutes(1.0))
+
+                // Wrong TFM — should be ignored.
+                let wrongDir = Path.Combine(fixture, "obj", "Debug", "net8.0-android34.0")
+                Directory.CreateDirectory(wrongDir) |> ignore
+                File.WriteAllBytes(Path.Combine(wrongDir, "_Microsoft.Android.Resource.Designer.dll"), [| 0uy |])
+
+                match AndroidRefPacks.findRealResourceDesigner projectPath "net10.0-android36.0" with
+                | Some path ->
+                    Expect.equal (Path.GetFullPath path) (Path.GetFullPath releaseDll) "newest TFM-matching DLL wins"
+                | None -> failtest "expected Some"
+            finally
+                if Directory.Exists fixture then
+                    Directory.Delete(fixture, true)
+        }
+
+        test "findRealResourceDesigner returns None when obj dir is absent" {
+            let fixture =
+                Path.Combine(Path.GetTempPath(), $"nps-android-noobj-{Guid.NewGuid():N}")
+
+            let projectPath = Path.Combine(fixture, "App.csproj")
+
+            try
+                Directory.CreateDirectory(fixture) |> ignore
+                File.WriteAllText(projectPath, "<Project />")
+
+                Expect.isNone
+                    (AndroidRefPacks.findRealResourceDesigner projectPath "net10.0-android36.0")
+                    "no obj dir should yield None"
+            finally
+                if Directory.Exists fixture then
+                    Directory.Delete(fixture, true)
+        }
+
+        test "AndroidAwareAssemblyResolver delegates non-stub requests to PathAssemblyResolver" {
+            match AndroidRefPacks.ensureResourceDesignerStub () with
+            | Error msg -> failtest msg
+            | Ok stubPath ->
+                let runtimeDlls =
+                    Directory.GetFiles(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+                    |> Array.toList
+
+                let resolver = AndroidAwareAssemblyResolver(stubPath :: runtimeDlls, stubPath)
+
+                use ctx = new Reflection.MetadataLoadContext(resolver)
+                let sysRuntime = Reflection.AssemblyName("System.Runtime")
+                let resolved = resolver.Resolve(ctx, sysRuntime)
+                Expect.isNotNull resolved "System.Runtime should resolve via inner PathAssemblyResolver"
         }
     ]
 
