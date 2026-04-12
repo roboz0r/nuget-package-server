@@ -4,7 +4,7 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="FSharp.Core" Version="10.1.201" />
+    <PackageVersion Include="FSharp.Core" Version="10.0.105" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
     <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
     <PackageVersion Include="NuGet.ProjectModel" Version="7.3.0" />
