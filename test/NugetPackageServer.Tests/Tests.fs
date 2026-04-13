@@ -333,7 +333,7 @@ let androidRefPacksTests =
         }
 
         test "getAndroidRefAssemblyPaths returns NotAndroid for plain TFM" {
-            match AndroidRefPacks.getAndroidRefAssemblyPaths "net10.0" with
+            match AndroidRefPacks.getAndroidRefAssemblyPaths None "net10.0" with
             | NotAndroid -> ()
             | other -> failtest $"expected NotAndroid, got {other}"
         }
@@ -406,6 +406,33 @@ let androidRefPacksTests =
                 | Some path ->
                     Expect.equal (Path.GetFullPath path) (Path.GetFullPath releaseDll) "newest TFM-matching DLL wins"
                 | None -> failtest "expected Some"
+            finally
+                if Directory.Exists fixture then
+                    Directory.Delete(fixture, true)
+        }
+
+        test "findRealResourceDesigner matches the API-stripped obj folder name" {
+            let fixture =
+                Path.Combine(Path.GetTempPath(), $"nps-android-stripped-{Guid.NewGuid():N}")
+
+            let projectPath = Path.Combine(fixture, "App.csproj")
+
+            try
+                Directory.CreateDirectory(fixture) |> ignore
+                File.WriteAllText(projectPath, "<Project />")
+
+                // The Android SDK writes to net10.0-android/ (no API level) even though
+                // the project's TFM is net10.0-android36.0.
+                let strippedDir = Path.Combine(fixture, "obj", "Debug", "net10.0-android")
+                Directory.CreateDirectory(strippedDir) |> ignore
+
+                let dll = Path.Combine(strippedDir, "_Microsoft.Android.Resource.Designer.dll")
+
+                File.WriteAllBytes(dll, [| 0uy |])
+
+                match AndroidRefPacks.findRealResourceDesigner projectPath "net10.0-android36.0" with
+                | Some path -> Expect.equal (Path.GetFullPath path) (Path.GetFullPath dll) "stripped form matches"
+                | None -> failtest "expected Some (stripped form should be accepted)"
             finally
                 if Directory.Exists fixture then
                     Directory.Delete(fixture, true)

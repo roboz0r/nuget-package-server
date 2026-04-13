@@ -52,48 +52,33 @@ module MetadataInspector =
 
     let createContext (inputs: ContextInputs) : MetadataLoadContext * string list =
         let androidResult =
-            AndroidRefPacks.getAndroidRefAssemblyPaths inputs.TargetFramework
+            AndroidRefPacks.getAndroidRefAssemblyPaths inputs.ProjectPath inputs.TargetFramework
 
         let diagnostics = ResizeArray<string>()
 
-        let extraPaths, stubPath =
+        let extraPaths, designer =
             match androidResult with
             | NotAndroid -> [], None
-            | Resolved(refFolder, paths, stub) ->
+            | Resolved(refFolder, paths, designer) ->
                 diagnostics.Add($"Android TFM detected: using ref pack at {refFolder}")
-                paths, stub
+
+                match designer with
+                | Some(RealDesigner path) -> diagnostics.Add($"Using real Resource.Designer assembly from {path}")
+                | Some(StubDesigner path) -> diagnostics.Add($"Using synthetic Resource.Designer stub at {path}")
+                | None -> ()
+
+                paths, designer
             | MissingPack msg ->
                 diagnostics.Add($"Android TFM detected but ref pack could not be resolved: {msg}")
                 [], None
 
-        // When the project has been built, prefer the real Resource.Designer over the stub:
-        // it has the correct strong name / PKT, so PathAssemblyResolver accepts it directly
-        // and it carries real resource IDs instead of an empty module.
-        let realDesignerPath =
-            match inputs.ProjectPath, androidResult with
-            | Some projectPath, Resolved _ ->
-                match AndroidRefPacks.findRealResourceDesigner projectPath inputs.TargetFramework with
-                | Some path ->
-                    diagnostics.Add($"Using real Resource.Designer assembly from {path}")
-                    Some path
-                | None -> None
-            | _ -> None
-
-        let designerPath =
-            match realDesignerPath with
-            | Some _ -> realDesignerPath
-            | None -> stubPath
-
         let paths =
-            inputs.PackageDllPaths
-            @ extraPaths
-            @ (realDesignerPath |> Option.toList)
-            @ getRuntimeAssemblyPaths ()
+            inputs.PackageDllPaths @ extraPaths @ getRuntimeAssemblyPaths ()
             |> List.distinct
 
         let resolver: MetadataAssemblyResolver =
-            match designerPath with
-            | Some designer -> AndroidAwareAssemblyResolver(paths, designer)
+            match designer with
+            | Some d -> AndroidAwareAssemblyResolver(paths, d.Path)
             | None -> PathAssemblyResolver(paths)
 
         new MetadataLoadContext(resolver), List.ofSeq diagnostics
